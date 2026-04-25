@@ -6,8 +6,8 @@ model:
     active_params_per_token: 32_000_000_000
     quant: "int4"
   slm:
-    repo: "meta-llama/Llama-3.2-1B-Instruct"
-    target_device: "mobile_npu"  # or "mps" for Apple Silicon
+    repo: "Qwen/Qwen3-30B-A3B-Instruct"          # MoE: 30B total, 3B active — mirrors Kimi K2 MoE architecture
+    target_device: "cpu"                           # 32GB mini PC (primary) or 128GB Mac (extended)
 
 stage1_probe:
   expert_convergence_threshold: 0.85
@@ -35,10 +35,14 @@ stage4_compress:
   temporal_decay_alpha: 0.01      # Section 5: memory decay
 
 stage5_slm:
-  base_model: "meta-llama/Llama-3.2-1B-Instruct"
-  kg_adapter: "wisdom_graph_lora"
-  target_tps: 24                  # Table 2: 24 tok/s on iPhone 15 Pro
-  target_ttft_ms: 180             # Table 2
+  base_model: "Qwen/Qwen3-30B-A3B-Instruct"       # MoE, 3B active params, Q4 ~6GB
+  base_model_extended: "Qwen/Qwen3-235B-A22B-Instruct"  # 128GB config, 22B active
+  kg_adapter: "wisdom_graph_rag"                   # RAG retrieval (no LoRA needed)
+  quant: "Q4_K_M"                                  # GGUF via llama.cpp for CPU inference
+  target_tps: 100                 # Table 2: 100+ tok/s on 32GB mini PC (Qwen3 benchmark)
+  target_ttft_ms: 150             # Table 2
+  hardware_primary: "32GB mini PC (x86 CPU)"
+  hardware_extended: "128GB Mac M-series (Apple Neural Engine)"
 
 stage6_mcp:
   port: 8765

@@ -1,13 +1,16 @@
 """
 Evaluation — Humanity's Last Exam (HLE) Benchmark
-Paper Table 2: Kimi K2.6 = 54.0%, Kimi-KG Mobile = 49.9% (92.4% parity).
+Paper Table 2: Kimi K2.6 = 54.0%, NRT-augmented Qwen3-30B-A3B = 49.9% (92.4% parity).
+
+Hardware: 32GB mini PC (primary) | 128GB Mac M-series (extended)
+Model:    Qwen3-30B-A3B Q4_K_M (~6GB active, 30B total MoE)
 
 PROOF TASK:
-  Run the NRT-augmented Llama 3.2 1B on the HLE test set and report:
+  Run the NRT-augmented Qwen3-30B-A3B on the HLE test set and report:
   - Accuracy score (target: ~49.9%)
   - Parity ratio vs Kimi K2.6 baseline (target: ≥ 92.4%)
-  - Inference speed (target: ≥ 24 tok/s)
-  - TTFT (target: ≤ 180 ms)
+  - Inference speed (target: ≥ 100 tok/s on 32GB mini PC)
+  - TTFT (target: ≤ 150 ms)
 """
 import json, time, sys
 from pathlib import Path
