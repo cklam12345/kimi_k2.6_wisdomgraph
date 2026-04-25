@@ -1,0 +1,16 @@
+# Neo4j database files (large binary data, not for version control)
+nrt_framework/neo4j/data/
+nrt_framework/neo4j/logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Embeddings cache (regenerated automatically)
+nrt_framework/artifacts/wisdom_graph/embeddings.npy
+
+# OS
+.DS_Store
