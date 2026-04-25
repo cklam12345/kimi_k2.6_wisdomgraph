@@ -1,0 +1,52 @@
+# NRT Pipeline Configuration
+model:
+  kimi_k2:
+    repo: "moonshotai/Kimi-K2.6"
+    num_layers: 61
+    active_params_per_token: 32_000_000_000
+    quant: "int4"
+  slm:
+    repo: "meta-llama/Llama-3.2-1B-Instruct"
+    target_device: "mobile_npu"  # or "mps" for Apple Silicon
+
+stage1_probe:
+  expert_convergence_threshold: 0.85
+  layers_to_probe: "all"          # or list of ints, e.g. [0,15,30,45,60]
+  output: "artifacts/expert_map.json"
+
+stage2_spo:
+  batch_size: 512
+  confidence_threshold: 0.72
+  output_dir: "artifacts/spo_triples"
+  target_triples: 450_000_000_000  # 450B triples (Table 1)
+
+stage3_hrkg:
+  framework: "LLHKG"
+  node_target: 1_200_000_000      # 1.2B nodes (Table 1)
+  storage_target_gb: 14.5
+  neo4j_uri: "bolt://localhost:7687"
+  neo4j_user: "neo4j"
+  neo4j_password: "wisdomgraph"
+
+stage4_compress:
+  node_target: 8_400_000          # 8.4M nodes (Table 1)
+  storage_target_gb: 3.2
+  compression_ratio: 185
+  temporal_decay_alpha: 0.01      # Section 5: memory decay
+
+stage5_slm:
+  base_model: "meta-llama/Llama-3.2-1B-Instruct"
+  kg_adapter: "wisdom_graph_lora"
+  target_tps: 24                  # Table 2: 24 tok/s on iPhone 15 Pro
+  target_ttft_ms: 180             # Table 2
+
+stage6_mcp:
+  port: 8765
+  host: "0.0.0.0"
+  graph_path: "artifacts/wisdom_graph"
+
+eval:
+  benchmark: "HLE"                # Humanity's Last Exam
+  target_parity: 0.924            # 92.4% parity (Abstract)
+  kimi_baseline: 0.540            # 54.0% HLE (Table 2)
+  kg_mobile_target: 0.499         # 49.9% HLE (Table 2)
