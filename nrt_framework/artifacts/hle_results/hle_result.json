@@ -1,0 +1,10 @@
+{
+  "model_id": "qwen3:30b-a3b",
+  "total_questions": 10,
+  "correct": 7,
+  "accuracy": 0.7,
+  "parity_vs_kimi": 0.7972665148063781,
+  "avg_tps": 55.01630489050565,
+  "avg_ttft_ms": 1096.7032374,
+  "passes_parity_bar": false
+}

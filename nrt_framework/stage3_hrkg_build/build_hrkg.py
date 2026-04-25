@@ -1,145 +1,101 @@
 """
-Stage 3 — Hyper-Relational Knowledge Graph Construction (LLHKG)
-Paper §3.2: Employ LLHKG to generate hyper-relational structures supporting
-complex many-to-many relations for long-horizon coding and swarm orchestration.
-Target: 1.2 Billion nodes, 14.5 GB (Table 1).
+Stage 3 — Hyper-Relational Knowledge Graph Construction in Neo4j
+Paper §3.2: Lift SPO triples into DIKW-labelled hyper-relational graph.
 
-PROOF TASK:
-  Lift flat SPO triples into hyper-relational statements:
-    (subject, predicate, object) + {qualifier_key: qualifier_value, ...}
-  Store in Neo4j with the DIKW node labels:
-    :Data  :Information  :Knowledge  :Wisdom
+Reads: artifacts/spo_triples/*.jsonl  (output of kimi_extractor.py)
+Writes: Neo4j graph (bolt://localhost:7687)
+
+Run:
+    python3 build_hrkg.py [config_path]
 """
-import pickle, json
+import json, re
 from pathlib import Path
-from typing import Generator
+from datetime import datetime
 from neo4j import GraphDatabase
 from tqdm import tqdm
-from dataclasses import dataclass
 
 
-@dataclass
-class HyperTriple:
-    subject: str
-    predicate: str
-    object: str
-    qualifiers: dict          # e.g. {"domain": "code", "confidence": 0.91, "layer": 42}
-    dikw_level: str           # "Data" | "Information" | "Knowledge" | "Wisdom"
-    temporal_weight: float    # 1.0 = fresh; decays toward 0 via §5 temporal decay
+# Safe relationship type: Neo4j rel types must be alphanumeric + underscore
+def safe_rel_type(pred: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_]", "_", pred.strip().upper().replace(" ", "_"))[:50]
 
 
-DIKW_RULES = {
-    "Data":        lambda t: t.qualifiers.get("confidence", 0) < 0.6,
-    "Information": lambda t: 0.6  <= t.qualifiers.get("confidence", 0) < 0.75,
-    "Knowledge":   lambda t: 0.75 <= t.qualifiers.get("confidence", 0) < 0.90,
-    "Wisdom":      lambda t: t.qualifiers.get("confidence", 0) >= 0.90,
-}
-
-
-def classify_dikw(t: HyperTriple) -> str:
-    for level, rule in DIKW_RULES.items():
-        if rule(t):
-            return level
-    return "Data"
-
-
-def spo_to_hyper(spo_triples: list) -> list[HyperTriple]:
-    """
-    Lift SPO triples into hyper-relational form by attaching qualifiers.
-    Each qualifier captures: domain, confidence, source_layer, source_expert,
-    timestamp (for temporal decay), and relation_type.
-    """
-    hyper = []
-    for t in spo_triples:
-        qualifiers = {
-            "domain":        t.domain,
-            "confidence":    t.confidence,
-            "source_layer":  t.source_layer,
-            "source_expert": t.source_expert,
-        }
-        ht = HyperTriple(
-            subject=t.subject,
-            predicate=t.predicate,
-            object=t.object,
-            qualifiers=qualifiers,
-            dikw_level="",
-            temporal_weight=1.0,
-        )
-        ht.dikw_level = classify_dikw(ht)
-        hyper.append(ht)
-    return hyper
-
-
-CYPHER_MERGE_TRIPLE = """
-MERGE (s:Entity {name: $subject})
-  SET s.dikw = $dikw_level
-MERGE (o:Entity {name: $object})
-MERGE (s)-[r:{predicate} {{
-  confidence:    $confidence,
-  domain:        $domain,
-  source_layer:  $source_layer,
-  source_expert: $source_expert,
-  temporal_weight: $temporal_weight,
-  dikw_level:    $dikw_level
-}}]->(o)
+CYPHER_INGEST = """
+UNWIND $rows AS row
+MERGE (s:Entity {name: row.subj})
+  ON CREATE SET s.created = row.extracted_at
+  SET s.dikw = row.dikw
+MERGE (o:Entity {name: row.obj})
+  ON CREATE SET o.created = row.extracted_at
+MERGE (s)-[r:RELATES_TO {predicate: row.pred}]->(o)
+  SET r.confidence     = row.conf,
+      r.dikw           = row.dikw,
+      r.source_topic   = row.source_topic,
+      r.model          = row.model,
+      r.extracted_at   = row.extracted_at,
+      r.temporal_weight = 1.0
 """
 
-def ingest_to_neo4j(
-    driver,
-    hyper_triples: list[HyperTriple],
-    batch_size: int = 1000,
-):
-    """Batch-ingest hyper-triples into Neo4j using parameterised Cypher."""
+CYPHER_INDEX = """
+CREATE INDEX entity_name IF NOT EXISTS FOR (n:Entity) ON (n.name)
+"""
+
+
+def load_jsonl(spo_dir: Path) -> list[dict]:
+    triples = []
+    for f in sorted(spo_dir.glob("spo_*.jsonl")):
+        if f.stat().st_size == 0:
+            continue
+        for line in f.read_text().splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    t = json.loads(line)
+                    # Normalise predicate to safe rel type
+                    t["pred_safe"] = safe_rel_type(t.get("pred", "RELATES_TO"))
+                    triples.append(t)
+                except json.JSONDecodeError:
+                    pass
+    return triples
+
+
+def ingest(driver, triples: list[dict], batch_size: int = 500):
     with driver.session() as session:
-        for i in range(0, len(hyper_triples), batch_size):
-            batch = hyper_triples[i:i+batch_size]
-            tx_data = [
-                {
-                    "subject":        ht.subject,
-                    "predicate":      ht.predicate,
-                    "object":         ht.object,
-                    "dikw_level":     ht.dikw_level,
-                    "confidence":     ht.qualifiers["confidence"],
-                    "domain":         ht.qualifiers["domain"],
-                    "source_layer":   ht.qualifiers["source_layer"],
-                    "source_expert":  ht.qualifiers["source_expert"],
-                    "temporal_weight":ht.temporal_weight,
-                }
-                for ht in batch
-            ]
-            session.run(
-                "UNWIND $rows AS row " +
-                "MERGE (s:Entity {name: row.subject}) "
-                "MERGE (o:Entity {name: row.object}) "
-                "MERGE (s)-[r:RELATES_TO {predicate: row.predicate}]->(o) "
-                "SET r += {confidence: row.confidence, domain: row.domain, "
-                "source_layer: row.source_layer, temporal_weight: row.temporal_weight, "
-                "dikw_level: row.dikw_level}",
-                rows=tx_data,
-            )
+        session.run(CYPHER_INDEX)
+        for i in tqdm(range(0, len(triples), batch_size), desc="Ingesting"):
+            batch = triples[i:i + batch_size]
+            session.run(CYPHER_INGEST, rows=batch)
+
+
+def stats(driver):
+    with driver.session() as session:
+        nodes = session.run("MATCH (n) RETURN count(n) AS c").single()["c"]
+        rels  = session.run("MATCH ()-[r]->() RETURN count(r) AS c").single()["c"]
+    return nodes, rels
 
 
 def run(config_path: str = "../config/pipeline.yaml"):
     import yaml
-    cfg = yaml.safe_load(Path(config_path).read_text())
-    spo_dir = Path("..") / cfg["stage2_spo"]["output_dir"]
-    neo4j_uri  = cfg["stage3_hrkg"]["neo4j_uri"]
-    neo4j_user = cfg["stage3_hrkg"]["neo4j_user"]
-    neo4j_pass = cfg["stage3_hrkg"]["neo4j_password"]
+    cfg      = yaml.safe_load(Path(config_path).read_text())
+    spo_dir  = Path("..") / cfg["stage2_spo"]["output_dir"]
+    uri      = cfg["stage3_hrkg"]["neo4j_uri"]
+    user     = cfg["stage3_hrkg"]["neo4j_user"]
+    password = cfg["stage3_hrkg"]["neo4j_password"]
 
-    driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_pass))
+    print(f"[Stage3] Loading triples from {spo_dir}")
+    triples = load_jsonl(spo_dir)
+    print(f"[Stage3] {len(triples)} triples loaded")
 
-    shard_files = sorted(spo_dir.glob("shard_*.pkl"))
-    total_nodes = 0
-    for shard_path in tqdm(shard_files, desc="Building HRKG"):
-        with open(shard_path, "rb") as f:
-            spo_batch = pickle.load(f)
-        hyper = spo_to_hyper(spo_batch)
-        ingest_to_neo4j(driver, hyper)
-        total_nodes += len(hyper)
+    driver = GraphDatabase.driver(uri, auth=(user, password))
+    ingest(driver, triples)
 
+    n, r = stats(driver)
     driver.close()
-    print(f"Stage 3 complete. ~{total_nodes} hyper-triples ingested into Neo4j at {neo4j_uri}")
+
+    print(f"\n[Stage3] Done.")
+    print(f"  Nodes: {n:,}")
+    print(f"  Relationships: {r:,}")
+    print(f"  Neo4j: {uri}")
 
 
 if __name__ == "__main__":

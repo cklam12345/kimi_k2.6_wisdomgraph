@@ -24,9 +24,9 @@ stage3_hrkg:
   framework: "LLHKG"
   node_target: 1_200_000_000      # 1.2B nodes (Table 1)
   storage_target_gb: 14.5
-  neo4j_uri: "bolt://localhost:7687"
+  neo4j_uri: "bolt://localhost:7693"
   neo4j_user: "neo4j"
-  neo4j_password: "wisdomgraph"
+  neo4j_password: "nrtgraph2026"
 
 stage4_compress:
   node_target: 8_400_000          # 8.4M nodes (Table 1)
@@ -54,3 +54,4 @@ eval:
   target_parity: 0.924            # 92.4% parity (Abstract)
   kimi_baseline: 0.540            # 54.0% HLE (Table 2)
   kg_mobile_target: 0.499         # 49.9% HLE (Table 2)
+  output: "artifacts/hle_results/hle_result.json"
